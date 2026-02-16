@@ -35,7 +35,7 @@ android {
         minSdk = minSdkVersion
         targetSdk = 36
         versionCode = 1
-        versionName = "0.0.1"
+        versionName = (findProperty("versionName") as String?) ?: "0.0.1"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
@@ -125,13 +125,45 @@ cargo {
     }
 }
 
+tasks.register("patchBuildScript") {
+    val scriptPath = "$projectDir/src/main/rust/slipstream-rust/scripts/build_picoquic.sh"
+    inputs.file(scriptPath)
+    outputs.file(scriptPath)
+    doLast {
+        val file = File(scriptPath)
+        val content = file.readText()
+        var newContent = content
+
+        if (!newContent.contains("CMAKE_FIND_ROOT_PATH_MODE_LIBRARY=BOTH")) {
+             newContent = newContent.replace(
+                "CMAKE_ARGS+=(\"-DANDROID_PLATFORM=\${ANDROID_PLATFORM}\")",
+                "CMAKE_ARGS+=(\"-DANDROID_PLATFORM=\${ANDROID_PLATFORM}\")\n    CMAKE_ARGS+=(\"-DCMAKE_FIND_ROOT_PATH_MODE_LIBRARY=BOTH\")\n    CMAKE_ARGS+=(\"-DCMAKE_FIND_ROOT_PATH_MODE_INCLUDE=BOTH\")\n    CMAKE_ARGS+=(\"-DCMAKE_FIND_ROOT_PATH_MODE_PACKAGE=BOTH\")"
+            )
+        }
+
+        if (!newContent.contains("PKG_CONFIG_PATH=\"\"")) {
+            newContent = newContent.replace(
+                "BUILD_TARGET=()",
+                "# Prevent pkg-config from finding system libraries (like brotli) when cross-compiling\nexport PKG_CONFIG_PATH=\"\"\nexport PKG_CONFIG_LIBDIR=\"\"\n\nBUILD_TARGET=()"
+            )
+        }
+
+        if (content != newContent) {
+            file.writeText(newContent)
+            println("Patched build_picoquic.sh for Android cross-compilation support")
+        }
+    }
+}
+
 tasks.whenTaskAdded {
     when (name) {
         "mergeDebugJniLibFolders", "mergeReleaseJniLibFolders" -> {
             dependsOn("cargoBuild")
-            // Track Rust JNI output without adding a second source set (avoids duplicate resources).
             inputs.dir(layout.buildDirectory.dir("rustJniLibs/android"))
         }
+    }
+    if (name.startsWith("cargoBuild")) {
+        dependsOn("patchBuildScript")
     }
 }
 
